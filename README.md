@@ -1,4 +1,4 @@
-# hs01-baremetal-firmware-no-pid
+# hs01-parabolic-firmware
 
 ## Кастомная, открытая прошивка для паяльника **Fnirsi HS-01** на базe 32-битного RISC-V микроконтроллера **WCH CH571F**.
 
