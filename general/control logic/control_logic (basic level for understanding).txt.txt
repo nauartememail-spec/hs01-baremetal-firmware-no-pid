@@ -1,0 +1,115 @@
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+⚙ Как это должно работать на практике? (Детали интерфейса и логики управления) ⚙
+Представим ситуацию: вы купили Fnirsi HS-01, залили в него наш софт, включили устройство, и на экране появилось следующее:
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1. Старт. Так как паяльник не откалиброван и не знает реальной температуры жала, он не должен сразу включаться на разогрев. 
+После запуска на экране всплывает уведомление с кратким вопросом: «Какая сейчас температура?». 
+Таким образом система хочет откалибровать данные с термистора на 10 кОм, распаянного внутри паяльника. 
+Важно, чтобы устройство после перепрошивки минут 10 полежало отключённым на столе и полностью остыло, так как в процессе прошивки некоторые компоненты могли внести погрешность в измерения. 
+После этого вы вводите реальную температуру, измеренную с помощью термометра, пирометра или инфракрасной камеры. 
+Сам процесс выглядит просто: вы стрелочками «вверх/вниз» листаете значения с шагом в один градус. 
+Базовая температура, которая отобразится в меню, составляет 25 градусов. 
+Выбрав нужный показатель, вы зажимаете две кнопки на 2 секунды. 
+В этот момент паяльник просчитывает уравнение Стейнхарта-Харта (или даже его упрощённую версию) и окончательно калибруется, привязывая переменную температуры к данным с терморезистора. 
+Также настоятельно рекомендуется измерить сопротивление жала перед его установкой, но об этом далее.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+2. Загрузка. После этого на паяльнике загружается основное меню. 
+В нём в упрощённом виде отображаются следующие параметры: температура жала, целевая температура, питающее напряжение, ток (примерный, так как токового шунта нет, 
+но мы знаем заполнение ШИМ, сопротивление жала и входное напряжение, чего более чем достаточно), максимальная мощность и текущая мощность. 
+Меню получается хитрым, но это основная телеметрия, и, как мне кажется, она очень важна. 
+Тут главное — правильно всё оформить. 
+Скоро через Excel я набросаю корректное расположение компонентов, и под этим текстом вы увидите примерный вариант интерфейса.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+3. Действия пользователя. Помните, для чего мы измеряли сопротивление жала? 
+Так вот, после загрузки паяльник будет находиться в полностью рабочем состоянии, но с одной оговоркой: он не станет сразу греть жало, 
+а будет показывать лишь входное напряжение и нулевой ток (и, как следствие, нулевую мощность). 
+Для его полноценного запуска потребуется произвести некоторую инициализацию, но поскольку основные манипуляции мы ещё не выполнили, об этом поговорим далее. 
+Итак, после включения нам нужно зажать две кнопки одновременно на 3 секунды, чтобы открылось меню. 
+Над его интерфейсом мы ещё поработаем, но если говорить о деталях логики: стрелками докручиваем до нужного параметра, зажимаем кнопку «вперёд» и переходим в выбранный пункт. 
+Чтобы вернуться в общее меню, нужно зажать стрелку «назад», а чтобы полностью выйти на рабочий экран с вольт-амперами — нажать «назад» ещё раз (либо, 
+если получится реализовать, просто удерживать эту стрелку до упора). 
+В меню мы открываем пункт параметров жала и вписываем его реальное сопротивление. 
+Таким образом переменная Rжала меняется со стоковых 6 Ом на фактическое значение. 
+После этого, если у вас оригинальное жало и для него в даташите указан ТКС (температурный коэффициент сопротивления), 
+стоит подкорректировать и этот параметр, иначе оставляйте его по умолчанию.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+4. Действия пользователя. После этого вам нужно будет найти меню, где указываются мощность адаптера и максимальный ток. 
+Я настоятельно рекомендую заранее занижать ток адаптера хотя бы на 100–300 мА, чтобы не использовать его 
+ресурс полностью (блок питания может уйти в защиту по температуре; лично я бы скинул даже 500 мА, но это зависит от конкретной модели). 
+Если же ваш источник питания может выдать больше 3–4 Ампер (допустим, это высокотоковый Li-Po аккумулятор от дрона), смело выставляйте все 3–4 А (20 В / 6 Ом). 
+В качестве фишки можно будет добавить индикацию «MAX», сигнализирующую о максимальном токе. Поздравляю, в теории вы выполнили всю настройку, и паяльник готов к бою!
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+5. Работаем! Чтобы включить паяльник, вам нужно выйти на главный экран и ввести
+комбинацию — букву «Н» на азбуке Морзе (один тире одна точка, если берём русскую Н). 
+Чтобы выключить устройство, необходимо сделать то же самое. 
+При этом предлагаю распределить этот ввод на две кнопки, чтобы не запутаться. 
+Сложность данной опции обусловлена тем, что эти же кнопки попутно отвечают за 
+регулировку температуры: чтобы уменьшить её на 5 градусов, нужно один раз нажать на левую кнопку (стрелка «назад»), а чтобы увеличить на 5 градусов — нажать на правую (стрелка «вперёд»). 
+Для быстрой настройки можно зажать стрелку «вперёд» или «назад» на 2 секунды. 
+Находясь в открывшемся окошке регулировки (которое будет всплывать, как в прошлой прошивке при любом нажатии, долгом или коротком), 
+вы сможете точно подстроить температуру обычными нажатиями, уже без риска случайно выключить паяльник.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+6. Дополнение. Я считаю, что очень важно дать пользователю возможность менять каждую переменную, предоставив ему полную свободу и право выбора режимов работы. 
+Например, настраивать коэффициент резкости от 20 до 70 градусов, менять итоговую поддерживаемую мощность на жале (от 0% до 15%), 
+регулировать линию убывания этой мощности (в диапазоне от 0 до 30 градусов), возможность опять откалибровать жало и делать прочие доступные настройки. 
+Также было бы отлично выпустить прошивку с поддержкой нескольких языков (включая русский, английский и китайский) и разных единиц измерения (цельсии и фаренгейты). 
+Если стоковой памяти микроконтроллера хватит, мы сделаем одну универсальную прошивку, где все эти пункты можно будет переключать прямо в меню.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+⚙️ **How should this work in practice? (UI details and control logic)** ⚙️
+Let's imagine the following scenario: you bought a Fnirsi HS-01, flashed our software onto it, and powered the device on. Here is what appears on the screen:
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1. **Startup.** Since the soldering iron is not yet calibrated and does not know the actual tip temperature, it must not start heating up immediately. 
+Upon boot, a notification pops up with a brief question: *"What is the current temperature?"*. 
+This is how the system triggers the calibration of the 10 kΩ thermistor built inside the iron. 
+It is crucial that after flashing, the device remains disconnected on the table for about 10 minutes to cool down completely, 
+as some components might have heated up during the flashing process and introduced measurement errors. 
+After that, you enter the actual ambient temperature measured with a thermometer, pyrometer, or thermal camera. 
+The process itself is simple: you use the "Up/Down" arrow buttons to adjust the value in 1-degree increments. 
+The default temperature displayed in the menu will be 25°C. 
+Once you select the correct value, you hold down both buttons for 2 seconds. 
+At this moment, the soldering iron calculates the Steinhart-Hart equation (or a simplified version of it) and finishes calibration, binding the temperature variable to the thermistor data. 
+It is also highly recommended to measure the tip resistance before installing it, but more on that below.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+2. **Booting and Main Menu.** After calibration, the main menu loads. 
+It displays the following essential telemetry in a simplified layout: current tip temperature, target temperature, 
+input voltage, calculated current (approximate, since there is no current shunt resistor, but we know the PWM duty cycle, 
+tip resistance, and input voltage, which is more than enough), maximum power, and current power consumption. 
+While this makes the menu layout quite complex, this core telemetry is vital for monitoring. 
+The key here is the correct UI design. 
+I will soon sketch out the exact component layout in Excel, and you will see a preview of the user interface below this text.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+3. **User Actions.** Remember why we measured the tip resistance? 
+Well, after booting, the soldering iron will be fully operational, but with one caveat: it will not start heating the tip immediately. 
+Instead, it will only display the input voltage, with the current and power consumption sitting at zero. 
+To fully activate it, a certain initialization will be required, but we will discuss that later since the primary setup is not yet complete. 
+So, after turning it on, you need to hold down both buttons simultaneously for 3 seconds to enter the menu. 
+We will refine the menu interface later, but here is how the control logic works: use the arrows to navigate to the desired parameter, then hold the "Forward" button to enter the selected item. 
+To return to the main menu, hold the "Back" arrow. 
+To completely exit to the telemetry screen showing volts and amps, press "Back" once more (or, if feasible to implement, simply long-press and hold this arrow). 
+In the menu, open the tip parameters section and enter its actual resistance. 
+This updates the `R_tip` variable from the stock 6 Ohms to the real measured value. 
+After that, if you are using an original tip and its datasheet specifies the TCR (Temperature Coefficient of Resistance), you should adjust this parameter as well; 
+otherwise, leave it at its default value.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+5. **Operation!** To turn the soldering iron on, you need to return to the main screen and enter a specific shortcut—the letter "Н" in Cyrillic Morse code (one dash, one dot: `-•`). 
+To turn the device off, you perform the exact same action. I suggest mapping this input across both buttons to prevent any confusion. 
+The complexity of this feature comes from the fact that these same buttons are simultaneously used for temperature adjustments. 
+A single press on the left button ("Back" arrow) decreases the temperature by 5°C, while pressing the right button ("Forward" arrow) increases it by 5°C. 
+For quick adjustments, you can hold either the "Forward" or "Back" arrow for 2 seconds. 
+Once you are inside the adjustment pop-up window (which will appear upon any short or long press, just like in the previous firmware), 
+you can fine-tune the temperature with standard presses without any risk of accidentally turning the soldering iron off.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+6. **Addendum (Advanced Customization).** I believe it is essential to give users the ability to modify every single variable, 
+providing full freedom and flexibility in selecting operating modes. 
+For example, users should be able to adjust the slope coefficient (from 20°C to 70°C), tweak the final sustained power delivered to the tip (from 0% to 15%), 
+regulate the power decay line (within a range of 0°C to 30°C), re-calibrate the tip, and modify other accessible parameters. 
+Furthermore, it would be ideal to release the firmware with multi-language support (including Russian, English, and Chinese) 
+and different measurement units (Celsius and Fahrenheit). 
+If the microcontroller's stock flash memory allows, we will build a single universal firmware where all these options can be toggled directly in the settings menu.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

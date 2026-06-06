@@ -1,0 +1,63 @@
+#include <stdint.h>  /* Подключаем стандартные целочисленные типы */
+
+/* ================= БЛОК НАСТРОЕК ГРАФИКА ================= */
+const int32_t T_target   = 200; /* Целевая температура */
+const int32_t K_sharp    = 50;  /* Резкость параболы (спад с 150°C) */
+const int32_t K_smooth   = 20;  /* Плавность хвоста (ноль на 220°C) */
+const int32_t PWM_max    = 95;  /* Максимальный ШИМ на полке (%) */
+const int32_t PWM_target = 10;  /* ШИМ в целевой точке (%) */
+/* ========================================================= */
+
+/**
+ * Функция вычисления модуля числа для 32-битных целых чисел.
+ * Избавляет от необходимости подключать громоздкие библиотеки.
+ */
+static inline int32_t c_labs(int32_t x) {
+    return (x >= 0) ? x : -x;
+}
+
+/**
+ * Пошаговый расчет итогового ШИМ на чистом C без плавающей точки.
+ * Все вычисления производятся в одной переменной `pwm`.
+ */
+int32_t calculate_universal_pwm(int32_t T) {
+    int32_t pwm = 0; 
+    int32_t T_start = T_target - K_sharp; 
+    
+    /* 1. Ограничиваем температуру снизу (клиппинг начальной полки) */
+    int32_t T_clamped = T_start + ((T - T_start) + c_labs(T - T_start)) / 2;
+    pwm = PWM_max; 
+    
+    /* 2. Расчет квадратичного падения (Парабола) */
+    int32_t p_delta = T_clamped - T_start;
+    int32_t p_chunk = K_sharp - ((K_sharp - p_delta) + c_labs(K_sharp - p_delta)) / 2;
+    pwm -= ((PWM_max - PWM_target) * p_chunk * p_chunk) / (K_sharp * K_sharp);
+    
+    /* 3. Расчет линейного падения (Хвост до нуля) */
+    int32_t l_delta = T_clamped - T_target;
+    int32_t l_chunk = (l_delta + c_labs(l_delta)) / 2; 
+    int32_t l_drop_limited = (l_chunk + K_smooth - c_labs(l_chunk - K_smooth)) / 2;
+    pwm -= (PWM_target * l_drop_limited) / K_smooth;
+    
+    /* 4. Жесткий аппаратный предохранитель от отрицательных значений */
+    pwm = (pwm + c_labs(pwm)) / 2;
+    
+    return pwm;
+}
+
+/**
+ * Чтение температуры со сглаживанием по 5 замерам
+ */
+int32_t read_smoothed_temperature(void) {
+    int32_t sum = 0;
+    int i;
+    
+    for (i = 0; i < 5; i++) {
+        /* Здесь вызывается встроенная функция чтения АЦП вашего WH571 */
+        /* Пример для периферии: sum += ADC_ReadChannel(ADC_CH_0); */
+        sum += 180; /* Временная заглушка для теста */
+    }
+    
+    return sum / 5;
+}
+

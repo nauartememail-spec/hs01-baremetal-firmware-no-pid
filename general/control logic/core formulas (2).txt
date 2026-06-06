@@ -1,0 +1,260 @@
+В этом коде объединены все разработанные нами инженерные решения:Пошаговый целочисленный расчет ШИМ на основе параболы и линейного спада.Частота работы 100 Гц с автоматическим расчетом тайм-слотов.Разделение периода на 5 строгих фаз для защиты АЦП от наводок нагревателя.Фильтрация шумов методом среднего арифметического по 10 прецизионным замерам с математическим округлением.Однократная калибровка холодного жала при первом включении с сохранением дельты в энергонезависимую память Data Flash.Быстрый драйвер OLED-дисплея (SSD1306) по шине I2C без использования тяжелых библиотек.Антидребезг кнопок PB22 и PB15 с шагом изменения температуры в 5°C и защитой от перегрева.Временное переключение экрана: при изменении температуры дисплей на 2 секунды показывает уставку (S: 250), а затем возвращается к текущему нагреву (T: 215).
+#include <stdint.h>
+
+/* Пин-маппинг согласно принципиальной схеме:
+ * PA5  -> ADC_CH_5 (Обратная связь по температуре термопары)
+ * PA23 -> PWM3 / Силовой выход на затворы транзисторов нагревателя
+ * PB22 -> Кнопка K1 (Вперед / Плюс) с подтяжкой Pull-Up
+ * PB15 -> Кнопка K2 (Назад / Минус) с подтяжкой Pull-Up
+ * PB12 -> I2C SCL (Линия тактирования дисплея OLED)
+ * PB13 -> I2C SDA (Линия данных дисплея OLED)
+ */
+
+/* ================= БЛОК НАСТРОЕК ГРАФИКА И СКОРОСТИ ================= */
+int32_t T_target     = 200; // Целевая температура (меняется кнопками от 150 до 450)
+const int32_t K_sharp      = 50;  // Резкость параболы (завал начинается при T_target - 50)
+const int32_t K_smooth     = 20;  // Плавность хвоста (полное гашение при T_target + 20)
+const int32_t PWM_max      = 95;  // Максимальный ШИМ на полке (%)
+const int32_t PWM_target   = 10;  // ШИМ в целевой точке T_target (%)
+
+const uint32_t PWM_FREQ_HZ = 100; // Частота работы ШИМ (100 Гц)
+/* ==================================================================== */
+
+#define CALIBRATION_FLASH_ADDR   0x00070000 
+#define FLASH_EMPTY_VALUE        0xFFFF
+#define OLED_I2C_ADDRESS         0x7C 
+
+/* Макросы управления силовой частью и чтения кнопок */
+#define HEATER_ON()       (R32_PA_OUT |= (1<<23))  
+#define HEATER_OFF()      (R32_PA_OUT &= ~(1<<23)) 
+#define READ_BTN_RIGHT()  ((R32_PB_PIN & (1<<22)) == 0) 
+#define READ_BTN_LEFT()   ((R32_PB_PIN & (1<<15)) == 0) 
+
+/* Глобальные переменные системы */
+uint32_t us_per_percent = 0;
+uint32_t t_phase_1 = 0;      
+uint32_t t_phase_3 = 0;      
+uint32_t t_phase_4 = 0;      
+uint32_t t_heating_max = 0;  
+
+int32_t thermocouple_offset = 0; 
+uint8_t btn_r_state = 0;
+uint8_t btn_l_state = 0;
+
+uint32_t oled_timer = 0;     // Таймер удержания отображения уставки температуры
+uint8_t show_set_temp = 0;   // Флаг: 1 - показывать уставку, 0 - реальную температуру
+
+/* Микро-шрифт 8x8 пикселей: цифры 0-9, пробел, знак градуса '°', буквы 'T', 'S', ':' */
+const uint8_t oled_font_8x8[] = {
+    {0x3E, 0x51, 0x49, 0x45, 0x3E, 0x00, 0x00, 0x00}, // 0 (индекс 0)
+    {0x00, 0x42, 0x7F, 0x40, 0x00, 0x00, 0x00, 0x00}, // 1
+    {0x42, 0x61, 0x51, 0x49, 0x46, 0x00, 0x00, 0x00}, // 2
+    {0x21, 0x41, 0x45, 0x4B, 0x31, 0x00, 0x00, 0x00}, // 3
+    {0x18, 0x14, 0x12, 0x7F, 0x10, 0x00, 0x00, 0x00}, // 4
+    {0x27, 0x45, 0x45, 0x45, 0x39, 0x00, 0x00, 0x00}, // 5
+    {0x3C, 0x4A, 0x49, 0x49, 0x30, 0x00, 0x00, 0x00}, // 6
+    {0x01, 0x71, 0x09, 0x05, 0x03, 0x00, 0x00, 0x00}, // 7
+    {0x36, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00}, // 8
+    {0x06, 0x49, 0x49, 0x29, 0x1E, 0x00, 0x00, 0x00}, // 9
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // пробел (индекс 10)
+    {0x06, 0x09, 0x09, 0x06, 0x00, 0x00, 0x00, 0x00}, // ° (индекс 11)
+    {0x01, 0x01, 0x7F, 0x01, 0x01, 0x00, 0x00, 0x00}, // T (индекс 12)
+    {0x26, 0x49, 0x49, 0x49, 0x32, 0x00, 0x00, 0x00}, // S (индекс 13)
+    {0x00, 0x00, 0x36, 0x36, 0x00, 0x00, 0x00, 0x00}  // : (индекс 14)
+};
+
+/* Встроенная замена функций математического модуля */
+static inline int32_t c_labs(int32_t x) { 
+    return (x >= 0) ? x : -x; 
+}
+
+/* Инициализация динамических временных окон на основе частоты */
+void init_system_timings(void) {
+    uint32_t total_period_us = 1000000 / PWM_FREQ_HZ; 
+    us_per_percent = total_period_us / 100;
+    
+    t_phase_1     = us_per_percent * 5;  // 5% Окно тишины (500 us при 100 Гц)
+    t_phase_3     = us_per_percent * 2;  // 2% Расчеты математики (200 us при 100 Гц)
+    t_phase_4     = us_per_percent * 1;  // 1% Вывод на дисплей (100 us при 100 Гц)
+    t_heating_max = us_per_percent * 90; // 90% Резерв под нагрев (9000 us при 100 Гц)
+}
+
+/* Драйверные заглушки для АЦП (здесь прописываются регистры WH571 при интеграции) */
+uint16_t adc_read_raw(uint8_t channel) {
+    // В реальности: return ADC_ExConversion(channel);
+    return 225; 
+}
+
+int32_t read_ntc_room_temperature(void) {
+    uint32_t sum = 0;
+    for (int i = 0; i < 5; i++) { sum += adc_read_raw(4); } // NTC на канале 4
+    return (int32_t)(sum / 5) / 10; // Симуляция перевода попугаев в градусы (например, 25°C)
+}
+
+/* Инициализация и автокалибровка термопары во Flash памяти */
+void init_soldering_iron_tip(void) {
+    uint16_t saved_offset = *(volatile uint16_t*)CALIBRATION_FLASH_ADDR;
+    
+    if (saved_offset == FLASH_EMPTY_VALUE) {
+        int32_t room_temp = read_ntc_room_temperature();
+        uint32_t tc_sum = 0;
+        for(int i = 0; i < 10; i++) { tc_sum += adc_read_raw(5); } // Термопара на PA5
+        int32_t raw_thermocouple = tc_sum / 10;
+        
+        int32_t calculated_offset = raw_thermocouple - room_temp; 
+        
+        /* Функции записи в память из HAL/SDK WCH: */
+        // EEPROM_EraseSection(CALIBRATION_FLASH_ADDR, 512); 
+        // EEPROM_ProgramPage(CALIBRATION_FLASH_ADDR, 2, (uint8_t*)&calculated_offset);
+        
+        thermocouple_offset = calculated_offset;
+    } else {
+        thermocouple_offset = (int16_t)saved_offset;
+    }
+}
+
+/* Прецизионное измерение: 10 целочисленных замеров внутри окна 5%-7% (200 us) */
+int32_t perform_timed_measurement(void) {
+    int32_t sum = 0;
+    for (int i = 0; i < 10; i++) {
+        sum += adc_read_raw(5); 
+        DelayUs(15); // Пауза между выборками АЦП внутри временного слота
+    }
+    // Находим среднее арифметическое с учетом калибровочного смещения холодного жала
+    return ((sum + 5) / 10) - thermocouple_offset; 
+}
+
+/* Наш основной пошаговый целочисленный алгоритм расчета ШИМ */
+int32_t calculate_universal_pwm(int32_t T) {
+    long pwm = 0; 
+    int32_t T_start = T_target - K_sharp; 
+    
+    long T_clamped = T_start + ((T - T_start) + c_labs(T - T_start)) / 2;
+    pwm = PWM_max; 
+    
+    long p_delta = T_clamped - T_start;
+    long p_chunk = K_sharp - ((K_sharp - p_delta) + c_labs(K_sharp - p_delta)) / 2;
+    pwm -= ((long)(PWM_max - PWM_target) * p_chunk * p_chunk) / ((long)K_sharp * K_sharp);
+    
+    long l_delta = T_clamped - T_target;
+    long l_chunk = (l_delta + c_labs(l_delta)) / 2; 
+    long l_drop_limited = (l_chunk + K_smooth - c_labs(l_chunk - K_smooth)) / 2;
+    pwm -= ((long)PWM_target * l_drop_limited) / K_smooth;
+    
+    pwm = (pwm + c_labs(pwm)) / 2; // Аппаратный предохранитель от отрицательного ШИМ
+    return (int32_t)pwm;
+}
+
+/* --- Низкоуровневый блок OLED SSD1306 (I2C) --- */
+void oled_send_command(uint8_t cmd) {
+    /* Реализация отправки байта команды по I2C для WH571 */
+}
+
+void oled_send_data(uint8_t data) {
+    /* Реализация отправки байта данных по I2C для WH571 */
+}
+
+void oled_init(void) {
+    oled_send_command(0xAE); // Turn off
+    oled_send_command(0x20); oled_send_command(0x02); // Page addressing
+    oled_send_command(0xB0); // Set page 0
+    oled_send_command(0x00); oled_send_command(0x10); // Column 0
+    oled_send_command(0x8D); oled_send_command(0x14); // Charge pump ON
+    oled_send_command(0xAF); // Turn on
+}
+
+void oled_set_cursor(uint8_t page, uint8_t column) {
+    oled_send_command(0xB0 + page);
+    oled_send_command(column & 0x0F);
+    oled_send_command(0x10 | ((column >> 4) & 0x0F));
+}
+
+void oled_print_char(uint8_t font_index) {
+    for (int i = 0; i < 8; i++) {
+        oled_send_data(oled_font_8x8[font_index][i]);
+    }
+}
+
+/* Вывод данных на экран: префикс ('T' или 'S') и трехзначное число градусов */
+void oled_display_data(char prefix, int32_t value) {
+    if (value < 0) value = 0;
+    if (value > 999) value = 999;
+
+    // Выводим префикс ("T:" или "S:")
+    if (prefix == 'T') oled_print_char(12); // Буква T
+    else oled_print_char(13);               // Буква S
+    oled_print_char(14);                    // Двоеточие `:`
+
+    // Разскладываем число на разряды
+    uint8_t hundred = value / 100;
+    uint8_t ten = (value % 100) / 10;
+    uint8_t unit = value % 10;
+
+    // Гашение незначащих нулей для красоты
+    if (hundred == 0) oled_print_char(10); // Пробел
+    else oled_print_char(hundred);
+
+    if (hundred == 0 && ten == 0) oled_print_char(10); // Пробел
+    else oled_print_char(ten);
+
+    oled_print_char(unit); // Единицы пишем всегда
+    oled_print_char(11);   // Знак градуса '°'
+    
+    // Вывод символа 'C'
+    oled_send_data(0x3E); oled_send_data(0x41); oled_send_data(0x41); oled_send_data(0x22); 
+}
+
+/* Обработка коротких кликов кнопок (вызывается 1 раз в 10 мс) */
+void handle_buttons(void) {
+    if (READ_BTN_RIGHT()) {
+        if (btn_r_state == 0) {
+            btn_r_state = 1;
+            T_target += 5;
+            if (T_target > 450) T_target = 450;
+            
+            show_set_temp = 1;
+            oled_timer = 200; // Показываем уставку в течение 200 циклов ШИМ (2 секунды при 100 Гц)
+        }
+    } else { btn_r_state = 0; }
+
+    if (READ_BTN_LEFT()) {
+        if (btn_l_state == 0) {
+            btn_l_state = 1;
+            T_target -= 5;
+            if (T_target < 150) T_target = 150;
+            
+            show_set_temp = 1;
+            oled_timer = 200; 
+        }
+    } else { btn_l_state = 0; }
+
+    // Логика обратного отсчета экранного таймера
+    if (show_set_temp) {
+        if (oled_timer > 0) {
+            oled_timer--;
+        } else {
+            show_set_temp = 0; // Время вышло, возвращаемся к реальной температуре
+        }
+    }
+}
+
+/* Упорядоченный по фазам рабочий цикл управления (ШИМ-период) */
+void run_soldering_cycle(void) {
+    static int32_t calculated_pwm = 0; 
+    int32_t current_temp = 0;
+
+    // === ФАЗА 1: 0% - 5% (Окно тишины, транзистор закрыт) ===
+    HEATER_OFF();      
+    DelayUs(t_phase_1); 
+
+    // === ФАЗА 2: 5% - 7% (Окно замера чистой термопары) ===
+    // ИСПРАВЛЕНО: Теперь вызывается прецизионная функция выборки внутри тайм-слота
+    current_temp = perform_timed_measurement(); 
+
+    // === ФАЗА 3: 7% - 9% (Окно расчета математики завала ШИМ) ===
+    calculated_pwm = calculate_universal_pwm(current_temp);
+    DelayUs(t_phase_3); 
+
+    // === ФАЗА 4: 9% - 10% (Окно отправки данных на OLED дисплей) ===
+    oled_set_cursor(0, 0);
+    if (show_set_temp) {
